@@ -44,7 +44,7 @@ speed           double precision
 
 Finish files `collector.ts` and `writer.ts` in the `src` directory of this repo.
 
-The collector should be able to take data from the MQTT broker and put them into an appropriate RabbitMQ queue. **Be aware that the data may be coming out of sync**. The gear is sent only when the driver changes it, speed is sometimes delayed and the battery info can be missing or come only for one battery at a time. Be sure to deal with this fact appropriately in a way the database records don't have missing data.
+The collector should be able to take data from the MQTT broker and put them into an appropriate RabbitMQ queue. **Be aware that the data may be coming out of sync**. The gear is sent only when the driver changes it, speed is sometimes delayed and the battery info can be missing or come only for one battery at a time. Be sure to deal with this fact appropriately in a way the timeseries of the data in the database doesn't have missing time points.
 
 Next, the writer should take the data from the RabbitMQ queue and insert them into the given database table.
 
