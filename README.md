@@ -1,57 +1,69 @@
-# Backend home assignment for Delta Green
+## Moje řešení
 
-## Overview
+### 1. Collector
+**Úkol:** Odebírat data z MQTT a předávat je do RabbitMQ fronty `car_state_raw`.  
+**Řešení:**
+- připojuje se k MQTT brokeru,
+- odebírá topic `car/1/#` (resp. dynamicky z configu `SUBSCRIBE_TOPIC`),
+- každou zprávu validuje jako JSON,
+- balí do objektu `{ topic, payload, timestamp }`,
+- posílá do RabbitMQ fronty.  
+✅ Hotovo.
 
-In this home assignment you are required to create a data pipeline which collects data from electrical cars and inputs them into the database.
+### 2. Writer
+**Úkol:** Číst zprávy z RabbitMQ, udržovat stav aut v paměti a každých 5 sekund uložit snapshot do Postgresu.  
+**Řešení:**
+- připojuje se k RabbitMQ i Postgresu,
+- `carStates` drží stav pro každé auto (latitude, longitude, gear, speed, socBatteries, capacityBatteries),
+- používá handlery pro každý typ topicu (latitude, longitude, gear, speed, soc, capacity),
+- každých 5 sekund:
+  - počítá vážený průměr SOC podle kapacit baterií,
+  - loguje chybějící data (⚠️ pokud SOC nebo capacity chybí),
+  - ukládá snapshot do Postgresu.  
+✅ Hotovo.
 
-The data are coming from an MQTT broker and your task is to feed them through a RabbitMQ queue into a Postgres database.
+### 3. Databáze
+**Tabulka `car_state`:**
+- `car_id` (integer)
+- `time` (timestamp)
+- `state_of_charge` (integer)
+- `latitude` (float)
+- `longitude` (float)
+- `gear` (integer)
+- `speed` (float)
 
-## Running the services
+**Řešení:**
+- `state_of_charge` ukládám jako `Math.round(overallSoc)`, takže je integer,
+- ostatní typy odpovídají zadání.  
+✅ Hotovo.
 
-Every service required to complete the assignment is defined in the `docker-compose.yml` file. To run it simply execute:
+### 4. Logování a debug
+- Collector loguje příjem a přeposílání zpráv,
+- Writer loguje stav baterií, chybějící kapacity a ukládání snapshotů.  
+✅ Pomáhá při ladění.
 
-```sh
-docker-compose up -d
-```
+### 5. Optimalizace a čistota kódu
+- typy (`interface CarState`, `RawMessage`),
+- konfigurace oddělena (`config.ts`, `.env`),
+- místo velkého `if/else` jsou použité handlery,
+- snapshot se ukládá jen každých 5s → menší tlak na databázi.  
+✅ Přehledné, rozšiřitelné, připravené i na více aut.
 
-This will start a Postgres database on local port `55432`, Mosquitto MQTT broker on port `51883`, RabbitMQ on port `55672` and helper script which will initialize the database tables and start the electrical car simulation. All important credentials for connecting to the services can be seen in the `docker-compose.yml` file itself.
+---
 
-## Data description
+## Design decision: strategie snapshotů
 
-The data coming from MQTT include these important topics:
+Na začátku jsem zvažoval dva přístupy:
 
-- `car/[carId]/location/latitude` - latitude component of current car's position
-- `car/[carId]/location/longitude` - longitude component of current car's position
-- `car/[carId]/speed` - current speed of the car in m/s
-- `car/[carId]/gear` - the gear the car is currently in (values N,1,2,3,4,5,6)
-- `car/[carId]/battery/[batteryIndex]/soc` - state of charge of given battery in the car as a percentage from 0-100
-- `car/[carId]/battery/[batteryIndex]/capacity` - capacity of given battery in the car in Wh
+1. **Čekat, až dorazí všechny hodnoty a teprve pak snapshotovat.**  
+   - výhoda: první záznam v DB bude kompletní  
+   - nevýhoda: časová řada nezačíná od nuly, mohou chybět první sekundy  
 
-The database contains a table called `car_state` with these columns:
+2. **Začít snapshotovat hned a chybějící hodnoty ukládat jako `NULL`.**  
+   - výhoda: časová řada je spojitá od začátku (žádné díry)  
+   - nevýhoda: první řádky mohou obsahovat `NULL`, dokud auto neposlalo všechny údaje  
 
-```
-id              serial primary key,
-car_id          integer,
-time            timestamp,
-state_of_charge integer,
-latitude        double precision,
-longitude       double precision,
-gear            integer,
-speed           double precision
-```
-
-## Expected work
-
-Finish files `collector.ts` and `writer.ts` in the `src` directory of this repo.
-
-The collector should be able to take data from the MQTT broker and put them into an appropriate RabbitMQ queue. **Be aware that the data may be coming out of sync**. The gear is sent only when the driver changes it, speed is sometimes delayed and the battery info can be missing or come only for one battery at a time. Be sure to deal with this fact appropriately in a way the timeseries of the data in the database doesn't have missing time points.
-
-Next, the writer should take the data from the RabbitMQ queue and insert them into the given database table.
-
-At the end of the process the database should contain rows with **5 second granularity** of the car's data for the given timestamp. Moreover, in the database we want the gear to be an integer with values (0-6, where N=0), speed to be in km/h and have only one state of charge. The overall state of charge should be computed as a weighted average of the underlying state of charge weighted by the batteries` capacity.
-
-For this task you should work only with one car with id `1`. It has two batteries and you can assume their capacity doesn't change (upon reading it from the MQTT topic you can save it in the code as a constant).
-
-## Finishing the assignment
-
-Please make a fork of this repo and work in your own fork. After the completion share the forked repo link with your interviewer (make sure it is public) and wait for further instructions.
+👉 **Rozhodnutí:** Vybral jsem variantu **2**, protože:
+- zadání klade důraz na spojitost časové řady,  
+- `NULL` je běžný způsob, jak vyjádřit „zatím neznámé“,  
+- v praxi auto stejně většinu stavů vyšle hned po startu, takže `NULL` rychle zmizí.  
